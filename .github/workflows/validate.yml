@@ -1,0 +1,27 @@
+name: Validate scripts
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install -y shellcheck jq openssl curl
+
+      - name: Run ShellCheck
+        run: shellcheck -x -S style anytls-ubuntu.sh tests/validate.sh
+
+      - name: Validate scripts and sing-box configuration
+        run: bash tests/validate.sh
