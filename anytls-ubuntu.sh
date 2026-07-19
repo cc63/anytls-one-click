@@ -8,7 +8,7 @@ umask 027
     exit 1
 }
 
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 PROJECT_URL="https://github.com/cc63/anytls-one-click"
 SING_BOX_REPO="SagerNet/sing-box"
 SING_BOX_API="https://api.github.com/repos/${SING_BOX_REPO}/releases/latest"
@@ -177,11 +177,27 @@ show_port_owner() {
 }
 
 get_public_ipv4() {
-    curl -4 -fsS --connect-timeout 5 --max-time 10 https://api.ipify.org 2>/dev/null || true
+    local endpoint address
+    for endpoint in https://api.ipify.org https://ifconfig.me/ip https://ipv4.icanhazip.com; do
+        address="$(curl -4 -fsS --connect-timeout 5 --max-time 10 "$endpoint" 2>/dev/null | tr -d '[:space:]' || true)"
+        if validate_ipv4 "$address"; then
+            printf '%s\n' "$address"
+            return 0
+        fi
+    done
+    return 0
 }
 
 get_public_ipv6() {
-    curl -6 -fsS --connect-timeout 5 --max-time 10 https://api64.ipify.org 2>/dev/null || true
+    local endpoint address
+    for endpoint in https://api64.ipify.org https://ifconfig.co/ip https://ipv6.icanhazip.com; do
+        address="$(curl -6 -fsS --connect-timeout 5 --max-time 10 "$endpoint" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [[ "$address" =~ ^[0-9A-Fa-f:]+$ && "$address" == *:* ]]; then
+            printf '%s\n' "$address"
+            return 0
+        fi
+    done
+    return 0
 }
 
 default_server_address() {
@@ -575,10 +591,10 @@ issue_letsencrypt_certificate() {
 configure_certificate_interactive() {
     local choice domain email cert key sni address skip
     title "证书模式"
-    printf '1) 自动申请 Let\x27s Encrypt 受信任证书（推荐）\n'
-    printf '2) 导入已有证书和私钥\n'
-    printf '3) 生成自签证书（无域名时使用）\n'
-    read -r -p "请选择 [1-3]，默认 1: " choice
+    printf '1) 我有域名，自动申请 Let\x27s Encrypt 证书\n'
+    printf '2) 我有现成证书和私钥（高级）\n'
+    printf '3) 我没有域名，生成自签证书\n'
+    read -r -p "请选择 [1-3]，直接回车选 1: " choice
     choice="${choice:-1}"
     case "$choice" in
         1)
@@ -716,19 +732,111 @@ prompt_install_config() {
     init_users "$username" "$password"
 }
 
+select_available_default_port() {
+    local candidate attempt
+    local -a preferred_ports=(443 8443 2053 2083 2087 2096 9443)
+    for candidate in "${preferred_ports[@]}"; do
+        if ! port_is_listening "$candidate"; then
+            PORT="$candidate"
+            if [[ "$PORT" != "443" ]]; then
+                warn "443/TCP 已被其他程序占用，已自动改用 ${PORT}/TCP。"
+            fi
+            return 0
+        fi
+    done
+    for ((attempt = 0; attempt < 30; attempt++)); do
+        candidate="$((10000 + RANDOM))"
+        if ! port_is_listening "$candidate"; then
+            PORT="$candidate"
+            warn "常用端口均被占用，已自动选择 ${PORT}/TCP。"
+            return 0
+        fi
+    done
+    die "无法找到可用 TCP 端口，请先停止不需要的服务。"
+}
+
+init_quick_defaults() {
+    select_available_default_port
+    LOG_LEVEL="info"
+    init_users "default" "$(random_password)"
+}
+
+configure_quick_ip() {
+    init_quick_defaults
+    SERVER_ADDR="$(default_server_address)"
+    [[ -n "$SERVER_ADDR" ]] || die "未能自动检测公网 IP，请改用交互菜单中的高级安装。"
+    validate_server_address "$SERVER_ADDR" || die "检测到的公网 IP 格式无效。"
+    SNI="www.microsoft.com"
+    CERT_MODE="selfsigned"
+    CERTBOT_NAME=""
+    EMAIL=""
+    INSECURE="true"
+    generate_self_signed_certificate "$SNI"
+    info "已选择纯 IP 模式：${SERVER_ADDR}:${PORT}，不需要域名。"
+}
+
+configure_quick_domain() {
+    local domain="${1:-}" email="${2:-}"
+    init_quick_defaults
+    if [[ -z "$domain" ]]; then
+        [[ -t 0 ]] || die "请在 install-domain 后填写域名。"
+        read -r -p "请输入已解析到这台 VPS 的域名: " domain
+    fi
+    domain="${domain,,}"
+    validate_domain "$domain" || die "域名格式不正确，例如 anytls.example.com。"
+    if [[ -z "$email" && -t 0 ]]; then
+        read -r -p "证书到期提醒邮箱（可直接回车跳过）: " email
+    fi
+    issue_letsencrypt_certificate "$domain" "$email"
+    CERT_MODE="letsencrypt"
+    SNI="$domain"
+    SERVER_ADDR="$domain"
+    EMAIL="$email"
+    INSECURE="false"
+}
+
+SELECTED_INSTALL_MODE=""
+
+choose_install_mode() {
+    local choice
+    title "选择安装方式"
+    printf '1) 纯 IP 极速安装（推荐，不需要域名，全部自动）\n'
+    printf '2) 域名证书安装（只需输入域名）\n'
+    printf '3) 高级自定义安装\n'
+    read -r -p "请选择 [1-3]，直接回车默认选 1: " choice
+    case "${choice:-1}" in
+        1) SELECTED_INSTALL_MODE="ip" ;;
+        2) SELECTED_INSTALL_MODE="domain" ;;
+        3) SELECTED_INSTALL_MODE="advanced" ;;
+        *) die "请输入 1、2 或 3。" ;;
+    esac
+}
+
 install_anytls() {
-    title "安装 AnyTLS Ubuntu 证书版"
+    local mode="${1:-select}" domain="${2:-}" email="${3:-}"
+    title "安装 AnyTLS Ubuntu 版"
     if is_installed; then
         confirm "已检测到安装，要重新安装吗？" || return 0
         systemctl stop "$SERVICE_NAME" 2>/dev/null || true
     fi
     install_dependencies
     ensure_layout
-    prompt_install_config
+    if [[ "$mode" == "select" ]]; then
+        choose_install_mode
+        mode="$SELECTED_INSTALL_MODE"
+    fi
+    case "$mode" in
+        ip) configure_quick_ip ;;
+        domain) configure_quick_domain "$domain" "$email" ;;
+        advanced)
+            prompt_install_config
+            configure_certificate_interactive
+            ;;
+        *) die "未知安装模式：${mode}" ;;
+    esac
     prepare_release
     install_prepared_release
     write_default_padding
-    configure_certificate_interactive
     save_state
     [[ "$CERT_MODE" == "letsencrypt" ]] && write_certbot_hook
     write_config
@@ -736,7 +844,8 @@ install_anytls() {
     sync_firewall
     systemctl enable "$SERVICE_NAME" >/dev/null
     restart_and_verify || die "AnyTLS 服务启动失败，请查看上方日志。"
-    info "AnyTLS 已安装并启动，sing-box 版本 ${RELEASE_VERSION}。"
+    title "安装完成"
+    info "AnyTLS 已启动，sing-box 版本 ${RELEASE_VERSION}。"
     warn "请同时在云厂商安全组放行 ${PORT}/TCP$([[ "$CERT_MODE" == "letsencrypt" ]] && printf '和 80/TCP')。"
     show_config
 }
@@ -1142,7 +1251,10 @@ AnyTLS Ubuntu 证书版一键脚本 v${SCRIPT_VERSION}
 用法: bash $0 [command]
 
 命令:
-  install       安装/重新安装
+  install-ip    纯 IP 零问题安装（无域名，推荐）
+  install-domain [域名] [邮箱]
+                自动申请域名证书并安装
+  install       选择纯 IP、域名或高级安装
   update        更新到最新稳定版 sing-box
   cert          证书管理
   renew         检查并续期 Let's Encrypt 证书
@@ -1155,7 +1267,7 @@ AnyTLS Ubuntu 证书版一键脚本 v${SCRIPT_VERSION}
   uninstall     卸载
   help          显示帮助
 
-无参数运行时显示交互菜单。
+无参数运行时显示交互菜单。纯 IP 用户直接使用 install-ip 即可。
 EOF
 }
 
@@ -1169,7 +1281,7 @@ show_menu() {
         else
             printf '状态: 未安装\n\n'
         fi
-        printf '1) 安装/重新安装\n'
+        printf '1) 安装/重新安装（默认纯 IP，无需域名）\n'
         printf '2) 更新 sing-box 核心\n'
         printf '3) 证书管理\n'
         printf '4) 用户管理\n'
@@ -1212,7 +1324,9 @@ main() {
     check_system
     case "$command" in
         menu) show_menu ;;
-        install) install_anytls ;;
+        install) install_anytls select ;;
+        install-ip) install_anytls ip ;;
+        install-domain) install_anytls domain "${2:-}" "${3:-}" ;;
         update) update_anytls ;;
         cert) certificate_menu ;;
         renew) renew_certificate ;;

@@ -48,6 +48,36 @@ if validate_password "short"; then
     exit 1
 fi
 
+# 443 被占用时，新手模式应自动选择第一个可用备用端口。
+port_is_listening() {
+    [[ "$1" == "443" ]]
+}
+select_available_default_port
+[[ "$PORT" == "8443" ]]
+
+TEST_USER=""
+TEST_PASSWORD=""
+TEST_CERT_SNI=""
+default_server_address() {
+    printf '203.0.113.10\n'
+}
+init_users() {
+    TEST_USER="$1"
+    TEST_PASSWORD="$2"
+}
+generate_self_signed_certificate() {
+    TEST_CERT_SNI="$1"
+}
+configure_quick_ip
+[[ "$SERVER_ADDR" == "203.0.113.10" ]]
+[[ "$PORT" == "8443" ]]
+[[ "$SNI" == "www.microsoft.com" ]]
+[[ "$CERT_MODE" == "selfsigned" ]]
+[[ "$INSECURE" == "true" ]]
+[[ "$TEST_USER" == "default" ]]
+validate_password "$TEST_PASSWORD"
+[[ "$TEST_CERT_SNI" == "$SNI" ]]
+
 prepare_release
 
 TEST_DIR="$(new_temp_dir)"
