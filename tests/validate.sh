@@ -48,34 +48,39 @@ if validate_password "short"; then
     exit 1
 fi
 
-# 443 被占用时，新手模式应自动选择第一个可用备用端口。
+# 默认端口应是可用的随机高位端口。
 port_is_listening() {
-    [[ "$1" == "443" ]]
+    return 1
 }
-select_available_default_port
-[[ "$PORT" == "8443" ]]
-
 TEST_USER=""
 TEST_PASSWORD=""
 TEST_CERT_SNI=""
-default_server_address() {
-    printf '203.0.113.10\n'
-}
 init_users() {
     TEST_USER="$1"
     TEST_PASSWORD="$2"
 }
+select_random_available_port
+((PORT >= 10000 && PORT <= 65535))
+
+# 模拟安装时连续回车：随机端口、默认用户、随机密码和 info 日志应自动生效。
+prompt_install_config < <(printf '\n\n\n\n')
+((PORT >= 10000 && PORT <= 65535))
+[[ "$TEST_USER" == "default" ]]
+validate_password "$TEST_PASSWORD"
+[[ "$LOG_LEVEL" == "info" ]]
+
+default_server_address() {
+    printf '203.0.113.10\n'
+}
 generate_self_signed_certificate() {
     TEST_CERT_SNI="$1"
 }
-configure_quick_ip
+configure_ip_certificate
 [[ "$SERVER_ADDR" == "203.0.113.10" ]]
-[[ "$PORT" == "8443" ]]
+((PORT >= 10000 && PORT <= 65535))
 [[ "$SNI" == "www.microsoft.com" ]]
 [[ "$CERT_MODE" == "selfsigned" ]]
 [[ "$INSECURE" == "true" ]]
-[[ "$TEST_USER" == "default" ]]
-validate_password "$TEST_PASSWORD"
 [[ "$TEST_CERT_SNI" == "$SNI" ]]
 
 prepare_release
