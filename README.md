@@ -1,84 +1,107 @@
 # AnyTLS 一键搭建脚本
 
-一个仓库提供两种 AnyTLS 服务端脚本：
+新手优先使用 `anytls-ubuntu.sh`：支持 Ubuntu 20.04/22.04/24.04 及更新版本，支持 `amd64` 和 `arm64`。
 
-- `anytls-ubuntu.sh`：面向 Ubuntu 的完整证书版，基于 sing-box AnyTLS 入站，支持 Let's Encrypt 自动申请和续期，推荐使用。
-- `anytls.sh`：基于官方 `anytls-go` reference server 的轻量版，支持多种 Linux 发行版，但只能使用运行时自签证书。
+## 纯 IP 一键安装（推荐）
 
-## Ubuntu 证书版一键安装
-
-适用 Ubuntu 20.04/22.04/24.04 及更新版本，支持 `amd64` 和 `arm64`。在 VPS 的 `root` 终端执行：
+不需要域名、邮箱或自己填写配置。在 Ubuntu VPS 的 `root` 终端复制执行：
 
 ```bash
-apt-get update && apt-get install -y curl && curl -LfsS https://raw.githubusercontent.com/cc63/anytls-one-click/main/anytls-ubuntu.sh -o /tmp/anytls-ubuntu.sh && chmod +x /tmp/anytls-ubuntu.sh && bash /tmp/anytls-ubuntu.sh
+apt-get update && apt-get install -y curl && curl -LfsS https://raw.githubusercontent.com/cc63/anytls-one-click/main/anytls-ubuntu.sh -o /tmp/anytls-ubuntu.sh && chmod +x /tmp/anytls-ubuntu.sh && bash /tmp/anytls-ubuntu.sh install-ip
 ```
 
-如果当前不是 `root`：
+非 `root` 用户执行：
 
 ```bash
-sudo apt-get update && sudo apt-get install -y curl && curl -LfsS https://raw.githubusercontent.com/cc63/anytls-one-click/main/anytls-ubuntu.sh -o /tmp/anytls-ubuntu.sh && chmod +x /tmp/anytls-ubuntu.sh && sudo bash /tmp/anytls-ubuntu.sh
+sudo apt-get update && sudo apt-get install -y curl && curl -LfsS https://raw.githubusercontent.com/cc63/anytls-one-click/main/anytls-ubuntu.sh -o /tmp/anytls-ubuntu.sh && chmod +x /tmp/anytls-ubuntu.sh && sudo bash /tmp/anytls-ubuntu.sh install-ip
 ```
 
-进入菜单后选择 `1) 安装/重新安装`。如果已经准备好域名，证书模式选择 `1) 自动申请 Let's Encrypt`。
+该命令不会询问技术参数，会自动完成：
 
-### 申请证书前提
+- 检测 VPS 公网 IPv4，没有 IPv4 时使用 IPv6
+- 优先使用 `443/TCP`，被占用时自动选择备用端口
+- 生成 48 位随机密码和自签 TLS 证书
+- 安装并启动最新稳定版 sing-box AnyTLS
+- 应用官方 Padding Scheme、安全权限和 systemd 开机自启
+- 如果 UFW 已启用，自动放行 AnyTLS 端口
+- 输出可直接导入的 AnyTLS 链接、sing-box JSON 和 Mihomo YAML
 
-1. 域名已添加 A 或 AAAA 记录，并指向当前 VPS。
-2. 使用 Cloudflare DNS 时先关闭代理小云朵，设为 `DNS only`。
-3. VPS 本机防火墙和云厂商安全组放行 `80/TCP` 和 AnyTLS 监听端口（默认 `443/TCP`）。
-4. 安装时 `80/TCP` 未被 Nginx、Apache 或其他程序占用。Certbot 续期时也需要该端口。
+安装完成后，只需看脚本最后显示的：
 
-脚本会在申请前检查 DNS 解析、公网 IPv4/IPv6 和端口占用。Certbot 定时器会自动续期，续期成功后自动更新 AnyTLS 证书并重启服务。
+```text
+服务器: VPS公网IP
+端口: 443
+密码: 自动生成
+分享链接: anytls://...
+```
 
-## Ubuntu 证书版功能
+把 `anytls://...` 复制到客户端即可。纯 IP 模式使用自签证书，因此导出配置会自动开启 `insecure` / `skip-cert-verify`。
 
-- 一键申请 Let's Encrypt 证书、自动续期、续期测试和证书状态查看
-- 支持导入已有证书/Cloudflare Origin 证书，也可生成自签证书
-- 自动安装最新稳定版 sing-box，使用 GitHub Release 提供的 SHA-256 摘要校验安装包
-- 一键更新 sing-box 核心，新版本校验或启动失败时自动回滚
+> 云厂商的安全组不在 VPS 系统内，脚本无法代为操作。如果客户端连不上，请在云控制台放行安装结果显示的 TCP 端口。
+
+## 有域名的安装方式
+
+需要 Let's Encrypt 受信任证书时，执行：
+
+```bash
+apt-get update && apt-get install -y curl && curl -LfsS https://raw.githubusercontent.com/cc63/anytls-one-click/main/anytls-ubuntu.sh -o /tmp/anytls-ubuntu.sh && chmod +x /tmp/anytls-ubuntu.sh && bash /tmp/anytls-ubuntu.sh install-domain
+```
+
+脚本只会询问域名和可选邮箱，其他参数全部自动。需要提前准备：
+
+1. 域名 A/AAAA 记录已指向 VPS。
+2. Cloudflare 关闭代理小云朵，设为 `DNS only`。
+3. 安全组放行 `80/TCP` 和脚本显示的 AnyTLS 端口。
+4. `80/TCP` 没有被 Nginx/Apache 占用。
+
+Certbot 定时器会自动续期，续期成功后自动更新 AnyTLS 证书并重启服务。
+
+## 交互菜单
+
+需要更多功能时，不带参数运行：
+
+```bash
+bash /tmp/anytls-ubuntu.sh
+```
+
+菜单支持：
+
+- 纯 IP、域名证书和高级自定义安装
+- Let's Encrypt 申请、自动续期、续期测试、自签或导入证书
 - 多用户添加、删除和密码重置
-- 监听端口、连接地址、日志级别和 Padding Scheme 管理
-- 输出 AnyTLS URI、sing-box JSON 和 Mihomo/Clash.Meta YAML
-- 安装、卸载、启动、停止、重启、状态和实时日志
-- 自动识别活动的 UFW，只跟踪和删除脚本自己添加的规则
-- 独立低权限系统用户和经过加固的 systemd 服务
-- 可选启用 BBR、FQ 和 TCP Fast Open
+- 端口、连接地址、日志和 Padding Scheme 管理
+- 核心更新、失败回滚、服务管理、实时日志和卸载
+- 可选 BBR、FQ 和 TCP Fast Open
 
-安装后可重新下载脚本，然后直接使用子命令：
+## 一键更新核心
 
 ```bash
-sudo bash anytls-ubuntu.sh update
-sudo bash anytls-ubuntu.sh cert
-sudo bash anytls-ubuntu.sh renew
-sudo bash anytls-ubuntu.sh users
-sudo bash anytls-ubuntu.sh config
-sudo bash anytls-ubuntu.sh show
-sudo bash anytls-ubuntu.sh status
-sudo bash anytls-ubuntu.sh logs
+curl -LfsS https://raw.githubusercontent.com/cc63/anytls-one-click/main/anytls-ubuntu.sh -o /tmp/anytls-ubuntu.sh && chmod +x /tmp/anytls-ubuntu.sh && sudo bash /tmp/anytls-ubuntu.sh update
 ```
 
-### Ubuntu 证书版文件位置
+新核心校验或启动失败时会自动回滚，原配置和用户不会被覆盖。
+
+## 文件位置
 
 | 文件 | 用途 |
 |---|---|
 | `/usr/local/bin/sing-box-anytls` | sing-box 服务端核心 |
-| `/etc/anytls-singbox/config.json` | sing-box AnyTLS 入站配置 |
+| `/etc/anytls-singbox/config.json` | sing-box AnyTLS 配置 |
 | `/etc/anytls-singbox/state.env` | 脚本状态 |
 | `/etc/anytls-singbox/users.json` | AnyTLS 用户 |
 | `/etc/anytls-singbox/padding.json` | Padding Scheme |
-| `/etc/anytls-singbox/cert/` | 服务读取的证书副本 |
-| `/etc/letsencrypt/` | Certbot 证书和续期配置 |
+| `/etc/anytls-singbox/cert/` | 服务使用的证书 |
 | `/etc/systemd/system/anytls-singbox.service` | systemd 服务 |
 
 ## 多系统轻量版
 
-如果没有域名，或者需要在 Debian、CentOS/RHEL、Rocky Linux、AlmaLinux 和 Fedora 上使用官方 reference server，可执行：
+Debian、CentOS/RHEL、Rocky Linux、AlmaLinux 和 Fedora 也可以使用官方 `anytls-go` reference server 版：
 
 ```bash
 wget -O anytls.sh --https-only https://raw.githubusercontent.com/cc63/anytls-one-click/main/anytls.sh && chmod +x anytls.sh && ./anytls.sh
 ```
 
-该版基于官方 [`anytls/anytls-go`](https://github.com/anytls/anytls-go)，支持更新回滚、Padding Scheme、UFW/firewalld、客户端配置导出和 BBR。由于官方 reference server 不支持读取外部证书，客户端必须开启 `insecure` / `skip-cert-verify`。
+该版不支持外部证书，客户端需要开启 `insecure` / `skip-cert-verify`。
 
 ## 上游项目
 

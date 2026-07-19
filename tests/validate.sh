@@ -48,6 +48,13 @@ if validate_password "short"; then
     exit 1
 fi
 
+# 443 被占用时，新手模式应自动选择第一个可用备用端口。
+port_is_listening() {
+    [[ "$1" == "443" ]]
+}
+select_available_default_port
+[[ "$PORT" == "8443" ]]
+
 prepare_release
 
 TEST_DIR="$(new_temp_dir)"
