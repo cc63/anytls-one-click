@@ -236,7 +236,7 @@ ensure_layout() {
 }
 
 write_default_padding() {
-    local target="${1:-$PADDING_FILE}"
+    local target="$PADDING_FILE"
     jq -n '[
         "stop=8",
         "0=30-30",
