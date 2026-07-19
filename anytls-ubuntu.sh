@@ -8,7 +8,7 @@ umask 027
     exit 1
 }
 
-SCRIPT_VERSION="2.1.0"
+SCRIPT_VERSION="2.2.0"
 PROJECT_URL="https://github.com/cc63/anytls-one-click"
 SING_BOX_REPO="SagerNet/sing-box"
 SING_BOX_API="https://api.github.com/repos/${SING_BOX_REPO}/releases/latest"
@@ -709,60 +709,69 @@ restart_and_verify() {
 }
 
 prompt_install_config() {
-    local input username password
-    read -r -p "AnyTLS 监听端口 [443]: " input
-    PORT="${input:-443}"
-    validate_port "$PORT" || die "端口必须为 1-65535 的整数。"
-    PORT="$((10#$PORT))"
-    [[ "$PORT" != "80" ]] || die "80 端口需要保留给证书申请与续期。"
-    if port_is_listening "$PORT"; then
-        error "${PORT}/TCP 已被占用。"
-        show_port_owner "$PORT"
-        die "请更换端口或停止占用程序。"
-    fi
-    read -r -p "初始用户名 [default]: " username
-    username="${username:-default}"
-    validate_username "$username" || die "用户名仅能包含字母、数字、点、下划线和减号。"
-    read -r -p "初始密码（留空随机生成）: " password
-    password="${password:-$(random_password)}"
-    validate_password "$password" || die "密码需为 8-128 位，仅允许字母、数字和 . _ ~ -。"
-    read -r -p "日志级别 [info]: " input
-    LOG_LEVEL="${input:-info}"
-    validate_log_level "$LOG_LEVEL" || die "日志级别只能是 debug/info/warn/error。"
+    local input username password suggested_port generated_password
+    select_random_available_port
+    suggested_port="$PORT"
+    while true; do
+        read -r -p "监听端口 [${suggested_port}]: " input
+        PORT="${input:-$suggested_port}"
+        if ! validate_port "$PORT"; then
+            warn "请输入 1-65535 之间的数字端口。"
+            continue
+        fi
+        PORT="$((10#$PORT))"
+        if ((PORT == 80)); then
+            warn "80 端口需保留给证书功能，请换一个端口。"
+            continue
+        fi
+        if port_is_listening "$PORT"; then
+            warn "${PORT}/TCP 已被占用，请换一个端口。"
+            show_port_owner "$PORT"
+            continue
+        fi
+        break
+    done
+    while true; do
+        read -r -p "用户名 [default]: " username
+        username="${username:-default}"
+        validate_username "$username" && break
+        warn "用户名只能包含字母、数字、点、下划线和减号。"
+    done
+    generated_password="$(random_password)"
+    while true; do
+        read -r -p "密码 [直接回车自动生成]: " password
+        password="${password:-$generated_password}"
+        validate_password "$password" && break
+        warn "密码需为 8-128 位，仅允许字母、数字和 . _ ~ -。"
+    done
+    while true; do
+        read -r -p "日志级别 [info]: " input
+        LOG_LEVEL="${input:-info}"
+        validate_log_level "$LOG_LEVEL" && break
+        warn "日志级别可选 debug、info、warn 或 error。"
+    done
     init_users "$username" "$password"
 }
 
-select_available_default_port() {
+select_random_available_port() {
     local candidate attempt
-    local -a preferred_ports=(443 8443 2053 2083 2087 2096 9443)
-    for candidate in "${preferred_ports[@]}"; do
+    for ((attempt = 0; attempt < 100; attempt++)); do
+        candidate="$((10000 + ((RANDOM * 32768 + RANDOM) % 55536)))"
         if ! port_is_listening "$candidate"; then
             PORT="$candidate"
-            if [[ "$PORT" != "443" ]]; then
-                warn "443/TCP 已被其他程序占用，已自动改用 ${PORT}/TCP。"
-            fi
             return 0
         fi
     done
-    for ((attempt = 0; attempt < 30; attempt++)); do
-        candidate="$((10000 + RANDOM))"
-        if ! port_is_listening "$candidate"; then
-            PORT="$candidate"
-            warn "常用端口均被占用，已自动选择 ${PORT}/TCP。"
-            return 0
-        fi
-    done
-    die "无法找到可用 TCP 端口，请先停止不需要的服务。"
+    die "连续尝试 100 个随机端口都不可用，请检查当前服务占用情况。"
 }
 
 init_quick_defaults() {
-    select_available_default_port
+    select_random_available_port
     LOG_LEVEL="info"
     init_users "default" "$(random_password)"
 }
 
-configure_quick_ip() {
-    init_quick_defaults
+configure_ip_certificate() {
     SERVER_ADDR="$(default_server_address)"
     [[ -n "$SERVER_ADDR" ]] || die "未能自动检测公网 IP，请改用交互菜单中的高级安装。"
     validate_server_address "$SERVER_ADDR" || die "检测到的公网 IP 格式无效。"
@@ -775,9 +784,13 @@ configure_quick_ip() {
     info "已选择纯 IP 模式：${SERVER_ADDR}:${PORT}，不需要域名。"
 }
 
-configure_quick_domain() {
-    local domain="${1:-}" email="${2:-}"
+configure_quick_ip() {
     init_quick_defaults
+    configure_ip_certificate
+}
+
+configure_domain_certificate() {
+    local domain="${1:-}" email="${2:-}"
     if [[ -z "$domain" ]]; then
         [[ -t 0 ]] || die "请在 install-domain 后填写域名。"
         read -r -p "请输入已解析到这台 VPS 的域名: " domain
@@ -795,13 +808,18 @@ configure_quick_domain() {
     INSECURE="false"
 }
 
+configure_quick_domain() {
+    init_quick_defaults
+    configure_domain_certificate "${1:-}" "${2:-}"
+}
+
 SELECTED_INSTALL_MODE=""
 
 choose_install_mode() {
     local choice
     title "选择安装方式"
-    printf '1) 纯 IP 极速安装（推荐，不需要域名，全部自动）\n'
-    printf '2) 域名证书安装（只需输入域名）\n'
+    printf '1) 纯 IP 安装（推荐，不需要域名）\n'
+    printf '2) 域名证书安装\n'
     printf '3) 高级自定义安装\n'
     read -r -p "请选择 [1-3]，直接回车默认选 1: " choice
     case "${choice:-1}" in
@@ -823,11 +841,23 @@ install_anytls() {
     ensure_layout
     if [[ "$mode" == "select" ]]; then
         choose_install_mode
-        mode="$SELECTED_INSTALL_MODE"
+        case "$SELECTED_INSTALL_MODE" in
+            ip) mode="guided-ip" ;;
+            domain) mode="guided-domain" ;;
+            advanced) mode="advanced" ;;
+        esac
     fi
     case "$mode" in
         ip) configure_quick_ip ;;
         domain) configure_quick_domain "$domain" "$email" ;;
+        guided-ip)
+            prompt_install_config
+            configure_ip_certificate
+            ;;
+        guided-domain)
+            prompt_install_config
+            configure_domain_certificate "$domain" "$email"
+            ;;
         advanced)
             prompt_install_config
             configure_certificate_interactive
@@ -1251,10 +1281,10 @@ AnyTLS Ubuntu 证书版一键脚本 v${SCRIPT_VERSION}
 用法: bash $0 [command]
 
 命令:
-  install-ip    纯 IP 零问题安装（无域名，推荐）
+  install-ip    非交互纯 IP 快速安装
   install-domain [域名] [邮箱]
                 自动申请域名证书并安装
-  install       选择纯 IP、域名或高级安装
+  install       交互安装，每项都可回车接受默认值
   update        更新到最新稳定版 sing-box
   cert          证书管理
   renew         检查并续期 Let's Encrypt 证书
@@ -1267,7 +1297,7 @@ AnyTLS Ubuntu 证书版一键脚本 v${SCRIPT_VERSION}
   uninstall     卸载
   help          显示帮助
 
-无参数运行时显示交互菜单。纯 IP 用户直接使用 install-ip 即可。
+无参数运行时显示操作菜单。选择安装后，不想自定义的内容可一路回车。
 EOF
 }
 
@@ -1281,7 +1311,7 @@ show_menu() {
         else
             printf '状态: 未安装\n\n'
         fi
-        printf '1) 安装/重新安装（默认纯 IP，无需域名）\n'
+        printf '1) 安装/重新安装（推荐值可一路回车）\n'
         printf '2) 更新 sing-box 核心\n'
         printf '3) 证书管理\n'
         printf '4) 用户管理\n'
